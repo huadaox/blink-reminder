@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,6 +63,7 @@ class CaptureWorker(QObject):
         self.last_reminder_at = 0.0
         self._smoothed_signal: float | None = None
         self._last_emit_at = 0.0
+        self._ear_history: deque[float] = deque(maxlen=90)
 
     def stop(self) -> None:
         self._running = False
@@ -110,6 +112,8 @@ class CaptureWorker(QObject):
                     left_crop = crop_eye(frame, landmarks, LEFT_EYE)
                     right_crop = crop_eye(frame, landmarks, RIGHT_EYE)
                     ear_value = compute_eye_aspect_ratio(landmarks)
+                    if ear_value is not None:
+                        self._ear_history.append(ear_value)
                     if left_crop is not None and right_crop is not None:
                         left_closed = classifier.predict_closed_probability(left_crop)
                         right_closed = classifier.predict_closed_probability(right_crop)
@@ -122,7 +126,7 @@ class CaptureWorker(QObject):
                             if left_closed is None or right_closed is None
                             else 1.0 - ((left_closed + right_closed) / 2.0)
                         )
-                        ear_open_signal = normalize_ear_signal(ear_value)
+                        ear_open_signal = normalize_ear_signal(ear_value, self._ear_history)
                         combined_signal = blend_signals(model_open_signal, ear_open_signal)
                         eye_signal = smooth_signal(self._smoothed_signal, combined_signal)
                         self._smoothed_signal = eye_signal
@@ -133,10 +137,14 @@ class CaptureWorker(QObject):
                         )
                     else:
                         state.status_message = "Face found, eye crop unstable"
-                        eye_signal = smooth_signal(self._smoothed_signal, normalize_ear_signal(ear_value))
+                        eye_signal = smooth_signal(
+                            self._smoothed_signal,
+                            normalize_ear_signal(ear_value, self._ear_history),
+                        )
                         self._smoothed_signal = eye_signal
                 else:
                     self._smoothed_signal = None
+                    self._ear_history.clear()
 
                 metrics = self.tracker.update(eye_signal, now_s)
                 if result.multi_face_landmarks and eye_signal is not None:
@@ -240,12 +248,16 @@ def point_distance(a, b) -> float:
     return math.hypot(a.x - b.x, a.y - b.y)
 
 
-def normalize_ear_signal(ear_value: float | None) -> float | None:
+def normalize_ear_signal(ear_value: float | None, history: deque[float]) -> float | None:
     if ear_value is None:
         return None
-    # Bias the fallback toward sensitivity: open eyes usually sit around 0.32-0.38,
-    # while even partial blinks often dip into the 0.20-0.26 range.
-    return float(np.clip((ear_value - 0.10) / 0.24, 0.0, 1.0))
+    if history:
+        sorted_history = sorted(history)
+        open_baseline = sorted_history[max(0, int(len(sorted_history) * 0.8) - 1)]
+        closed_floor = max(0.08, open_baseline - 0.11)
+        span = max(open_baseline - closed_floor, 0.05)
+        return float(np.clip((ear_value - closed_floor) / span, 0.0, 1.0))
+    return float(np.clip((ear_value - 0.14) / 0.18, 0.0, 1.0))
 
 
 def blend_signals(model_open_signal: float | None, ear_open_signal: float | None) -> float | None:
