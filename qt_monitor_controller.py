@@ -42,8 +42,12 @@ class EyeStateClassifier:
         eye = np.transpose(eye, (2, 0, 1))[None, ...]
         logits = self.session.run([self.output_name], {self.input_name: eye})[0]
         logits = np.asarray(logits, dtype=np.float32).reshape(-1)
+        if not np.isfinite(logits).all():
+            return float("nan")
         exp = np.exp(logits - logits.max())
         probs = exp / exp.sum()
+        if not np.isfinite(probs).all():
+            return float("nan")
         return float(probs[-1])
 
 
@@ -109,12 +113,24 @@ class CaptureWorker(QObject):
                     if left_crop is not None and right_crop is not None:
                         left_closed = classifier.predict_closed_probability(left_crop)
                         right_closed = classifier.predict_closed_probability(right_crop)
-                        model_open_signal = 1.0 - ((left_closed + right_closed) / 2.0)
+                        if not math.isfinite(left_closed):
+                            left_closed = None
+                        if not math.isfinite(right_closed):
+                            right_closed = None
+                        model_open_signal = (
+                            None
+                            if left_closed is None or right_closed is None
+                            else 1.0 - ((left_closed + right_closed) / 2.0)
+                        )
                         ear_open_signal = normalize_ear_signal(ear_value)
                         combined_signal = blend_signals(model_open_signal, ear_open_signal)
                         eye_signal = smooth_signal(self._smoothed_signal, combined_signal)
                         self._smoothed_signal = eye_signal
-                        state.status_message = "Eye-state model active"
+                        state.status_message = (
+                            "Eye-state model active"
+                            if model_open_signal is not None
+                            else "Model unstable, EAR fallback active"
+                        )
                     else:
                         state.status_message = "Face found, eye crop unstable"
                         eye_signal = smooth_signal(self._smoothed_signal, normalize_ear_signal(ear_value))
