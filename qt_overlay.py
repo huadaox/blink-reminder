@@ -21,7 +21,7 @@ class ReminderOverlay(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._next_frame)
         self.fade = QPropertyAnimation(self, b"windowOpacity", self)
-        self.fade.setDuration(260)
+        self.fade.setDuration(320)
         self.fade.setEasingCurve(QEasingCurve.OutCubic)
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
@@ -39,7 +39,7 @@ class ReminderOverlay(QWidget):
         pix = self.frames[0]
         w = pix.width()
         h = pix.height()
-        self.setGeometry(QRect((screen.width() - w) // 2, int(screen.height() * 0.76), w, h))
+        self.setGeometry(QRect((screen.width() - w) // 2, int(screen.height() * 0.72), w, h))
         self.label.setGeometry(0, 0, w, h)
         self.frame_index = 0
         self.label.setPixmap(self.frames[0])
@@ -47,10 +47,10 @@ class ReminderOverlay(QWidget):
         self.show()
         self.fade.stop()
         self.fade.setStartValue(0.0)
-        self.fade.setEndValue(0.86)
+        self.fade.setEndValue(0.78)
         self.fade.start()
-        self.timer.start(70)
-        self.hide_timer.start(1800)
+        self.timer.start(78)
+        self.hide_timer.start(2000)
 
     def _next_frame(self) -> None:
         self.frame_index += 1

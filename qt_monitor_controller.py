@@ -10,7 +10,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import onnxruntime as ort
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from blink_tracker import BlinkFrequencyTracker, BlinkMetrics
 
@@ -28,6 +28,7 @@ class BlinkUiState:
     right_closed_probability: float | None = None
     eye_signal: float | None = None
     ear: float | None = None
+    is_paused: bool = False
 
 
 class EyeStateClassifier:
@@ -65,9 +66,18 @@ class CaptureWorker(QObject):
         self._last_emit_at = 0.0
         self._left_ear_history: deque[float] = deque(maxlen=90)
         self._right_ear_history: deque[float] = deque(maxlen=90)
+        self._paused = False
 
     def stop(self) -> None:
         self._running = False
+
+    @Slot(bool)
+    def set_paused(self, paused: bool) -> None:
+        self._paused = paused
+        if paused:
+            self._smoothed_signal = None
+            self._left_ear_history.clear()
+            self._right_ear_history.clear()
 
     def run(self) -> None:
         model_path = Path(__file__).resolve().parent / "models" / "eye_state_classifier.onnx"
@@ -99,6 +109,19 @@ class CaptureWorker(QObject):
                 if not ok:
                     self.state_changed.emit(BlinkUiState(status_message="Camera read failed"))
                     time.sleep(0.2)
+                    continue
+
+                if self._paused:
+                    if now_s - self._last_emit_at >= 0.2:
+                        self._last_emit_at = now_s
+                        self.state_changed.emit(
+                            BlinkUiState(
+                                metrics=self.tracker.update(None, now_s),
+                                status_message="Monitoring paused",
+                                is_paused=True,
+                            )
+                        )
+                    time.sleep(0.08)
                     continue
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -179,6 +202,7 @@ class CaptureWorker(QObject):
                             right_closed_probability=right_closed,
                             eye_signal=eye_signal,
                             ear=ear_value if result.multi_face_landmarks else None,
+                            is_paused=False,
                         )
                     )
                 time.sleep(0.06)
@@ -207,6 +231,9 @@ class BlinkMonitorController(QObject):
         self.worker.stop()
         self.thread.quit()
         self.thread.wait(1500)
+
+    def set_paused(self, paused: bool) -> None:
+        self.worker.set_paused(paused)
 
 
 def open_camera() -> cv2.VideoCapture:
