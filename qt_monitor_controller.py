@@ -58,7 +58,7 @@ class CaptureWorker(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._running = True
-        self.tracker = BlinkFrequencyTracker(close_threshold=0.50, open_threshold=0.68)
+        self.tracker = BlinkFrequencyTracker(close_threshold=0.62, open_threshold=0.78)
         self.last_reminder_at = 0.0
         self._smoothed_signal: float | None = None
         self._last_emit_at = 0.0
@@ -129,7 +129,7 @@ class CaptureWorker(QObject):
                         state.status_message = (
                             "Eye-state model active"
                             if model_open_signal is not None
-                            else "Model unstable, EAR fallback active"
+                            else "EAR fallback active"
                         )
                     else:
                         state.status_message = "Face found, eye crop unstable"
@@ -243,8 +243,9 @@ def point_distance(a, b) -> float:
 def normalize_ear_signal(ear_value: float | None) -> float | None:
     if ear_value is None:
         return None
-    # Typical open-eye EAR is roughly 0.26-0.32 on Face Mesh; closed blinks dip near 0.15.
-    return float(np.clip((ear_value - 0.15) / 0.17, 0.0, 1.0))
+    # Bias the fallback toward sensitivity: open eyes usually sit around 0.32-0.38,
+    # while even partial blinks often dip into the 0.20-0.26 range.
+    return float(np.clip((ear_value - 0.10) / 0.24, 0.0, 1.0))
 
 
 def blend_signals(model_open_signal: float | None, ear_open_signal: float | None) -> float | None:
