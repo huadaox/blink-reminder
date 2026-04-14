@@ -1,63 +1,71 @@
-# Blink Reminder
+# 眨眼提醒 Blink Reminder
 
-Blink Reminder is a Windows desktop app that monitors blink frequency from a webcam and shows a gentle on-screen reminder when your blink rate drops.
+人在长时间盯着屏幕时，眨眼次数通常会明显下降。眨眼减少会影响泪膜稳定，容易带来眼干、酸胀、疲劳等问题。
 
-The current implementation is designed for local, offline use:
+这个项目的目标很直接：做一个本地离线运行的小工具，利用摄像头估计用户的眨眼频率，并在眨眼频率过低时，用尽量温和、不打扰的方式提醒用户主动眨眼。
 
-- `PySide6` for the desktop UI and reminder overlay
-- `MediaPipe Face Mesh` for face and eye-region tracking
-- `ONNX Runtime` for eye-state inference
-- adaptive per-eye fallback logic so the app remains usable when eye shape changes or one eye is partially occluded
+## 适用场景
 
-## What It Does
+- 长时间办公
+- 写代码、写文档、做表格
+- 长时间阅读网页或 PDF
+- 游戏、剪辑、看盘等高专注盯屏场景
 
-- Tracks blink frequency in real time
-- Shows current blinks per minute, total blink count, and recent blink history
-- Displays a 5-minute blink timeline
-- Uses a low-intrusion reminder overlay instead of a permanent floating window
-- Keeps debug values visible for tuning:
-  - left eye closed probability
-  - right eye closed probability
-  - merged eye signal
-  - EAR fallback value
+## 当前功能
 
-## Current Detection Pipeline
+- 实时估计眨眼频率
+- 显示每分钟眨眼次数
+- 显示最近 5 分钟眨眼时间线
+- 显示最近一次眨眼距今时间
+- 在眨眼频率过低时弹出低侵入式提醒动画
+- 支持本地离线运行，不依赖云端服务
+- 提供调试信息，便于继续优化识别效果
 
-The app uses a hybrid pipeline:
+## 当前技术方案
 
-1. `MediaPipe Face Mesh` finds the face and eye regions.
-2. An ONNX eye-state classifier estimates whether each eye is open or closed.
-3. If model output is unstable, the app falls back to adaptive per-eye `EAR` tracking.
-4. A blink tracker converts the eye signal into blink events and rolling blink frequency.
+- `PySide6`：桌面界面与提醒浮层
+- `MediaPipe Face Mesh`：人脸与眼部区域定位
+- `ONNX Runtime`：眼睛开闭状态推理
+- `EAR` 自适应兜底：在模型不稳定或部分遮挡时维持可用性
 
-This approach is more robust than using a fixed EAR threshold alone, especially when:
+当前识别策略不是单纯依赖固定阈值，而是混合使用：
 
-- the user moves slightly closer to or farther from the camera
-- one eye is partly covered
-- the user looks tired and the default eye opening becomes smaller
+1. 人脸关键点提取眼部区域
+2. ONNX 模型估计眼睛开闭状态
+3. 当模型输出不稳定时，回退到基于 `EAR` 的自适应估计
+4. 将信号转换为眨眼事件和滚动频率
 
-## Project Structure
+## 为什么要做这个工具
 
-- `main.py`: main entrypoint
-- `app_qt.py`: Qt application bootstrap
-- `qt_main_window.py`: dashboard window
-- `qt_overlay.py`: reminder overlay animation
-- `qt_monitor_controller.py`: camera capture, face tracking, inference, blink logic
-- `blink_tracker.py`: blink event state machine and rolling metrics
-- `models/eye_state_classifier.onnx`: ONNX eye-state model
-- `assets/reminder_frames/`: transparent PNG animation frames for the reminder
+很多人并不会主动意识到自己在盯屏时眨眼变少了。真正等到眼睛明显难受时，往往已经持续很久。
 
-## Requirements
+相比复杂的健康平台，这个项目更偏向一个简单、实用的小工具：
 
-- Windows 10 or Windows 11
-- A working webcam
+- 只做一件事：提醒你别忘了眨眼
+- 尽量离线、本地运行
+- 尽量弱打扰，不做常驻大悬浮窗
+- 允许继续迭代识别准确率和提醒体验
+
+## 项目结构
+
+- `main.py`：程序入口
+- `app_qt.py`：Qt 应用启动
+- `qt_main_window.py`：主界面
+- `qt_overlay.py`：提醒动画浮层
+- `qt_monitor_controller.py`：摄像头采集、推理与状态流转
+- `blink_tracker.py`：眨眼计数与频率统计
+- `models/eye_state_classifier.onnx`：眼睛开闭模型
+- `assets/reminder_frames/`：提醒动画帧素材
+
+## 运行环境
+
+- Windows 10 / 11
+- 可用摄像头
 - Python `3.12`
 
-This project is not currently set up for Python `3.14`, mainly because some computer vision dependencies do not provide matching wheels there.
+当前不建议直接使用 Python `3.14`，因为部分视觉依赖在该版本上的 wheel 支持并不完整。
 
-## Quick Start
-
-Create and activate a Python `3.12` virtual environment:
+## 本地运行
 
 ```powershell
 py -m uv python install 3.12
@@ -69,51 +77,42 @@ python -m pip install -r .\requirements.txt
 python .\main.py
 ```
 
-If `uv` is not available in your shell, you can still use the created `.venv` and install with `pip`.
+如果你的环境里 `uv` 不在 PATH 中，也可以继续使用创建好的 `.venv`，直接通过 `pip` 安装依赖。
 
-## Packaging
+## 打包
 
-Use `PyInstaller` in `onedir` mode:
+建议使用 `PyInstaller` 的 `onedir` 方式：
 
 ```powershell
 python -m pip install pyinstaller
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name BlinkMonitorQt --add-data "assets\reminder_frames;assets\reminder_frames" --add-data "models\eye_state_classifier.onnx;models" --collect-all PySide6 --collect-all onnxruntime --collect-all cv2 --collect-all mediapipe main.py
 ```
 
-Output:
+输出目录：
 
 ```powershell
-dist\BlinkMonitorQt\BlinkMonitorQt.exe
+dist\BlinkMonitorQt\
 ```
 
-For distribution, package the whole `dist\BlinkMonitorQt\` directory, not only the `.exe`.
+分发时应打包整个目录，而不是只拿单个 `exe` 文件。
 
-## Notes on Accuracy
+## 当前状态
 
-This is still a practical desktop beta, not a medical product.
+这是一个仍在持续迭代中的桌面版 beta 项目，目前重点放在：
 
-Things that currently affect detection quality:
+- 提高不同眼型、不同距离下的识别稳定性
+- 降低提醒侵入感
+- 降低 CPU 占用
+- 优化分发和安装体验
 
-- large head rotation
-- very poor lighting
-- strong glasses reflections
-- very low camera placement
-- heavy motion blur
+## 已知限制
 
-The app is intentionally biased toward practical desktop reminder behavior rather than strict scientific blink labeling.
+- 光照过差时识别会下降
+- 大角度侧脸时效果有限
+- 眼镜强反光会影响识别
+- 疲倦导致眼睛自然睁开较小时，虽然已经加入自适应逻辑，但仍有继续优化空间
+- 打包体积仍然较大
 
-## Beta Status
+## 开源协议
 
-Current release target: `beta0.01`
-
-Known limitations:
-
-- CPU usage is still higher than a fully optimized native implementation
-- ONNX eye-state inference can be unstable on some machines, so EAR fallback remains important
-- packaging size is large because the app ships with Qt, ONNX Runtime, OpenCV, and MediaPipe
-
-## License
-
-No license has been added yet.
-
-If you plan to open-source this publicly, you should add a license before wider distribution.
+本项目采用 `MIT License` 开源。
