@@ -7,6 +7,11 @@ namespace BlinkReminder.Native.ViewModels;
 public sealed partial class MainViewModel : ObservableObject
 {
     private readonly IBlinkPipeline _pipeline = new OpenVinoBlinkPipeline();
+    private readonly NativePipelineCoordinator _coordinator = new(
+        new MediaCaptureFrameSource(),
+        new OpenVinoFrameProcessor(),
+        new NativeReminderPresenter()
+    );
 
     [ObservableProperty]
     private string _statusText = "等待初始化";
@@ -43,6 +48,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             await _pipeline.InitializeAsync(CancellationToken.None);
             var snapshot = await _pipeline.StartAsync(CancellationToken.None);
+            var warmupEvents = await _coordinator.WarmupAsync(CancellationToken.None);
 
             StatusText = snapshot.StatusText;
             DetailText = snapshot.DetailText;
@@ -53,6 +59,11 @@ public sealed partial class MainViewModel : ObservableObject
 
             RecentEvents.Clear();
             foreach (var item in snapshot.RecentEvents)
+            {
+                RecentEvents.Add(item);
+            }
+
+            foreach (var item in warmupEvents)
             {
                 RecentEvents.Add(item);
             }
@@ -80,6 +91,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task TestReminderAsync()
     {
         await _pipeline.TriggerReminderPreviewAsync();
+        await _coordinator.ShowReminderPreviewAsync(CancellationToken.None);
         RecentEvents.Insert(0, "已触发提醒预览");
         OnPropertyChanged(nameof(RecentEvents));
     }
