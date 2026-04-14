@@ -63,7 +63,8 @@ class CaptureWorker(QObject):
         self.last_reminder_at = 0.0
         self._smoothed_signal: float | None = None
         self._last_emit_at = 0.0
-        self._ear_history: deque[float] = deque(maxlen=90)
+        self._left_ear_history: deque[float] = deque(maxlen=90)
+        self._right_ear_history: deque[float] = deque(maxlen=90)
 
     def stop(self) -> None:
         self._running = False
@@ -111,40 +112,54 @@ class CaptureWorker(QObject):
                     landmarks = result.multi_face_landmarks[0].landmark
                     left_crop = crop_eye(frame, landmarks, LEFT_EYE)
                     right_crop = crop_eye(frame, landmarks, RIGHT_EYE)
-                    ear_value = compute_eye_aspect_ratio(landmarks)
-                    if ear_value is not None:
-                        self._ear_history.append(ear_value)
-                    if left_crop is not None and right_crop is not None:
+                    left_ear = eye_aspect_ratio(landmarks, LEFT_EYE)
+                    right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE)
+                    ear_value = average_available([left_ear, right_ear])
+                    if left_ear is not None:
+                        self._left_ear_history.append(left_ear)
+                    if right_ear is not None:
+                        self._right_ear_history.append(right_ear)
+
+                    left_model_open = None
+                    right_model_open = None
+                    if left_crop is not None:
                         left_closed = classifier.predict_closed_probability(left_crop)
-                        right_closed = classifier.predict_closed_probability(right_crop)
                         if not math.isfinite(left_closed):
                             left_closed = None
+                        elif left_closed is not None:
+                            left_model_open = 1.0 - left_closed
+                    if right_crop is not None:
+                        right_closed = classifier.predict_closed_probability(right_crop)
                         if not math.isfinite(right_closed):
                             right_closed = None
-                        model_open_signal = (
-                            None
-                            if left_closed is None or right_closed is None
-                            else 1.0 - ((left_closed + right_closed) / 2.0)
-                        )
-                        ear_open_signal = normalize_ear_signal(ear_value, self._ear_history)
-                        combined_signal = blend_signals(model_open_signal, ear_open_signal)
+                        elif right_closed is not None:
+                            right_model_open = 1.0 - right_closed
+
+                    left_ear_open = normalize_ear_signal(left_ear, self._left_ear_history)
+                    right_ear_open = normalize_ear_signal(right_ear, self._right_ear_history)
+
+                    left_signal = blend_signals(left_model_open, left_ear_open)
+                    right_signal = blend_signals(right_model_open, right_ear_open)
+                    combined_signal = average_available([left_signal, right_signal])
+
+                    if combined_signal is not None:
                         eye_signal = smooth_signal(self._smoothed_signal, combined_signal)
                         self._smoothed_signal = eye_signal
-                        state.status_message = (
-                            "Eye-state model active"
-                            if model_open_signal is not None
-                            else "EAR fallback active"
-                        )
+                        visible_eyes = sum(value is not None for value in (left_signal, right_signal))
+                        if visible_eyes == 2:
+                            state.status_message = (
+                                "Eye-state model active"
+                                if left_model_open is not None or right_model_open is not None
+                                else "EAR fallback active"
+                            )
+                        elif visible_eyes == 1:
+                            state.status_message = "Single-eye fallback active"
                     else:
                         state.status_message = "Face found, eye crop unstable"
-                        eye_signal = smooth_signal(
-                            self._smoothed_signal,
-                            normalize_ear_signal(ear_value, self._ear_history),
-                        )
-                        self._smoothed_signal = eye_signal
                 else:
                     self._smoothed_signal = None
-                    self._ear_history.clear()
+                    self._left_ear_history.clear()
+                    self._right_ear_history.clear()
 
                 metrics = self.tracker.update(eye_signal, now_s)
                 if result.multi_face_landmarks and eye_signal is not None:
@@ -229,10 +244,7 @@ def crop_eye(frame: np.ndarray, landmarks, indexes: list[int]) -> np.ndarray | N
 def compute_eye_aspect_ratio(landmarks) -> float | None:
     left = eye_aspect_ratio(landmarks, LEFT_EYE)
     right = eye_aspect_ratio(landmarks, RIGHT_EYE)
-    if left is None and right is None:
-        return None
-    valid = [value for value in (left, right) if value is not None]
-    return float(sum(valid) / len(valid))
+    return average_available([left, right])
 
 
 def eye_aspect_ratio(landmarks, indexes: list[int]) -> float | None:
@@ -254,10 +266,17 @@ def normalize_ear_signal(ear_value: float | None, history: deque[float]) -> floa
     if history:
         sorted_history = sorted(history)
         open_baseline = sorted_history[max(0, int(len(sorted_history) * 0.8) - 1)]
-        closed_floor = max(0.08, open_baseline - 0.11)
-        span = max(open_baseline - closed_floor, 0.05)
+        closed_floor = max(0.05, open_baseline - max(0.07, open_baseline * 0.28))
+        span = max(open_baseline - closed_floor, 0.04)
         return float(np.clip((ear_value - closed_floor) / span, 0.0, 1.0))
     return float(np.clip((ear_value - 0.14) / 0.18, 0.0, 1.0))
+
+
+def average_available(values: list[float | None]) -> float | None:
+    valid = [value for value in values if value is not None]
+    if not valid:
+        return None
+    return float(sum(valid) / len(valid))
 
 
 def blend_signals(model_open_signal: float | None, ear_open_signal: float | None) -> float | None:
